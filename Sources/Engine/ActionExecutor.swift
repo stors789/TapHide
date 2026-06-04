@@ -78,7 +78,9 @@ final class ActionExecutor {
               let windowElement = window as! AXUIElement?
         else {
             // No focused window (e.g. just minimized). Try restoring any minimized window.
+            DebugLog.shared.write("[MINIMIZE] no focused window for PID \(pid)")
             if !restoreAnyMinimizedWindow(pid: pid) {
+                DebugLog.shared.write("[MINIMIZE] fallback to hide (no focused window) for PID \(pid)")
                 executeHide(pid: pid)
             }
             return

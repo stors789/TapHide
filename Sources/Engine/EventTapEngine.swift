@@ -82,7 +82,7 @@ final class EventTapEngine {
             return Unmanaged.passUnretained(event)
         }
 
-        let capturedFrontmostPID = FrontmostTracker.shared.currentPID
+        var capturedFrontmostPID = FrontmostTracker.shared.currentPID
         guard let targetPID = DockIconCache.shared.lookup(at: point) else {
             return Unmanaged.passUnretained(event)
         }
@@ -90,12 +90,29 @@ final class EventTapEngine {
         let rawMode = UserDefaults.standard.string(forKey: "behaviorMode") ?? "hide"
         let mode = BehaviorMode(rawValue: rawMode) ?? .hide
 
-        DebugLog.shared.write("[TAP] mouseDown@(\(Int(point.x)),\(Int(point.y))) frontmost=\(capturedFrontmostPID) target=\(targetPID) mode=\(rawMode)")
+        let targetName = NSRunningApplication(processIdentifier: targetPID)?
+            .localizedName ?? "?"
+        let frontmostName = NSRunningApplication(processIdentifier: capturedFrontmostPID)?
+            .localizedName ?? "?"
+
+        DebugLog.shared.write("[TAP] mouseDown@(\(Int(point.x)),\(Int(point.y))) frontmost=\(capturedFrontmostPID)(\(frontmostName)) target=\(targetPID)(\(targetName)) mode=\(rawMode)")
 
         // Debounce: if Dock is restoring this PID, stay out of the way
         if ActionExecutor.shared.isRestoring(pid: targetPID) {
             DebugLog.shared.write("[TAP] debounce — pass through for PID \(targetPID)")
             return Unmanaged.passUnretained(event)
+        }
+
+        // When cached frontmost doesn't match, try a live check
+        // to handle race conditions where didActivateApplicationNotification
+        // hasn't been processed yet on the main queue.
+        if targetPID != capturedFrontmostPID {
+            let livePID = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
+            if livePID == targetPID {
+                let liveName = NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"
+                DebugLog.shared.write("[TAP] live check overrode frontmost: \(capturedFrontmostPID)(\(frontmostName)) -> \(livePID)(\(liveName))")
+                capturedFrontmostPID = livePID
+            }
         }
 
         // Toggle: target is frontmost → hide or minimize.

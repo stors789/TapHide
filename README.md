@@ -62,7 +62,14 @@ DockToggle is intentionally closer to a lightweight Dock enhancement such as Hyp
 
 ## Installation
 
-### For Users
+### Via Homebrew (Recommended)
+
+```bash
+brew tap stors789/tap
+brew install --cask docktoggle
+```
+
+### From Source
 
 ```bash
 # 1. Clone

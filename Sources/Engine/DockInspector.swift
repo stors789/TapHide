@@ -79,23 +79,19 @@ final class DockInspector {
         }
 
         // Strategy 4: compute from screen geometry (all Dock positions)
-        if let screen = NSScreen.main {
+        let dockDefaults = UserDefaults(suiteName: "com.apple.dock")
+        let orientation = dockDefaults?.string(forKey: "orientation") ?? "bottom"
+        let autohide = dockDefaults?.bool(forKey: "autohide") ?? false
+        
+        for screen in NSScreen.screens {
             let sf = screen.frame
             let vf = screen.visibleFrame
-            
-            let cgScreenFrame = convertToCG(sf)
-            let cgVisibleFrame = convertToCG(vf)
-            
-            let dockDefaults = UserDefaults(suiteName: "com.apple.dock")
-            let orientation = dockDefaults?.string(forKey: "orientation") ?? "bottom"
-            let autohide = dockDefaults?.bool(forKey: "autohide") ?? false
+            let cgScreenFrame = getCGScreenBounds(for: screen)
             
             var dockRect = CGRect.zero
             
             if autohide {
-                // In autohide mode, visibleFrame == screen.frame.
-                // We define a default 100px thick zone along the appropriate edge.
-                let thickness: CGFloat = 100
+                let thickness: CGFloat = 4 // conservative
                 switch orientation {
                 case "bottom":
                     dockRect = CGRect(x: cgScreenFrame.origin.x, y: cgScreenFrame.maxY - thickness, width: cgScreenFrame.width, height: thickness)
@@ -107,27 +103,23 @@ final class DockInspector {
                     dockRect = CGRect(x: cgScreenFrame.origin.x, y: cgScreenFrame.maxY - thickness, width: cgScreenFrame.width, height: thickness)
                 }
             } else {
-                // Non-autohide: calculate based on visibleFrame difference in CoreGraphics coordinates
-                let bottomH = cgScreenFrame.maxY - cgVisibleFrame.maxY
-                let leftW = cgVisibleFrame.minX - cgScreenFrame.minX
-                let rightW = cgScreenFrame.maxX - cgVisibleFrame.maxX
-                let topH = cgVisibleFrame.minY - cgScreenFrame.minY
+                let bottomGap = vf.minY - sf.minY
+                let leftGap = vf.minX - sf.minX
+                let rightGap = sf.maxX - vf.maxX
                 
-                if bottomH > 0 {
-                    dockRect = CGRect(x: cgScreenFrame.origin.x, y: cgVisibleFrame.maxY, width: cgScreenFrame.width, height: bottomH)
-                } else if leftW > 0 {
-                    dockRect = CGRect(x: cgScreenFrame.origin.x, y: cgScreenFrame.origin.y, width: leftW, height: cgScreenFrame.height)
-                } else if rightW > 0 {
-                    dockRect = CGRect(x: cgVisibleFrame.maxX, y: cgScreenFrame.origin.y, width: rightW, height: cgScreenFrame.height)
-                } else if topH > 0 {
-                    dockRect = CGRect(x: cgScreenFrame.origin.x, y: cgScreenFrame.origin.y, width: cgScreenFrame.width, height: topH)
+                if orientation == "bottom" && bottomGap > 0 {
+                    dockRect = CGRect(x: cgScreenFrame.origin.x, y: cgScreenFrame.maxY - bottomGap, width: cgScreenFrame.width, height: bottomGap)
+                } else if orientation == "left" && leftGap > 0 {
+                    dockRect = CGRect(x: cgScreenFrame.origin.x, y: cgScreenFrame.origin.y, width: leftGap, height: cgScreenFrame.height)
+                } else if orientation == "right" && rightGap > 0 {
+                    dockRect = CGRect(x: cgScreenFrame.maxX - rightGap, y: cgScreenFrame.origin.y, width: rightGap, height: cgScreenFrame.height)
                 }
             }
 
             if !dockRect.isEmpty {
                 frameQueue.async(flags: .barrier) { self._cachedFrame = dockRect }
                 log.info("Dock frame (screen calc): \(String(describing: dockRect))")
-                DebugLog.shared.write("[DOCK] screen calc: cgScreen=\(cgScreenFrame) cgVisible=\(cgVisibleFrame) -> dock=\(dockRect)")
+                DebugLog.shared.write("[DOCK] screen calc: cgScreen=\(cgScreenFrame) -> dock=\(dockRect)")
                 return
             }
         }
@@ -269,14 +261,16 @@ final class DockInspector {
         role.lowercased().contains("dockitem")
     }
 
-    private func convertToCG(_ rect: NSRect) -> CGRect {
-        guard let primaryScreen = NSScreen.screens.first else { return rect }
-        let primaryHeight = primaryScreen.frame.height
+    private func getCGScreenBounds(for screen: NSScreen) -> CGRect {
+        if let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID {
+            return CGDisplayBounds(screenNumber)
+        }
+        guard let primaryScreen = NSScreen.screens.first else { return screen.frame }
         return CGRect(
-            x: rect.origin.x,
-            y: primaryHeight - rect.origin.y - rect.size.height,
-            width: rect.size.width,
-            height: rect.size.height
+            x: screen.frame.origin.x,
+            y: primaryScreen.frame.height - screen.frame.maxY,
+            width: screen.frame.width,
+            height: screen.frame.height
         )
     }
 
@@ -287,26 +281,57 @@ final class DockInspector {
 
         let dockDefaults = UserDefaults(suiteName: "com.apple.dock")
         let orientation = dockDefaults?.string(forKey: "orientation") ?? "bottom"
+        let autohide = dockDefaults?.bool(forKey: "autohide") ?? false
 
-        guard let screen = NSScreen.screens.first(where: { convertToCG($0.frame).contains(point) }) else {
+        guard let screen = NSScreen.screens.first(where: { getCGScreenBounds(for: $0).contains(point) }) else {
             return false
         }
 
-        let screenCGFrame = convertToCG(screen.frame)
-        let thickness: CGFloat = 100
+        let screenCGFrame = getCGScreenBounds(for: screen)
 
-        switch orientation {
-        case "bottom":
-            let hotspot = CGRect(x: screenCGFrame.origin.x, y: screenCGFrame.maxY - thickness, width: screenCGFrame.width, height: thickness)
-            return hotspot.contains(point)
-        case "left":
-            let hotspot = CGRect(x: screenCGFrame.origin.x, y: screenCGFrame.origin.y, width: thickness, height: screenCGFrame.height)
-            return hotspot.contains(point)
-        case "right":
-            let hotspot = CGRect(x: screenCGFrame.maxX - thickness, y: screenCGFrame.origin.y, width: thickness, height: screenCGFrame.height)
-            return hotspot.contains(point)
-        default:
-            return false
+        if autohide {
+            let thickness: CGFloat = 4 // conservative
+            switch orientation {
+            case "bottom":
+                let hotspot = CGRect(x: screenCGFrame.origin.x, y: screenCGFrame.maxY - thickness, width: screenCGFrame.width, height: thickness)
+                return hotspot.contains(point)
+            case "left":
+                let hotspot = CGRect(x: screenCGFrame.origin.x, y: screenCGFrame.origin.y, width: thickness, height: screenCGFrame.height)
+                return hotspot.contains(point)
+            case "right":
+                let hotspot = CGRect(x: screenCGFrame.maxX - thickness, y: screenCGFrame.origin.y, width: thickness, height: screenCGFrame.height)
+                return hotspot.contains(point)
+            default:
+                return false
+            }
+        } else {
+            let sf = screen.frame
+            let vf = screen.visibleFrame
+            let bottomGap = vf.minY - sf.minY
+            let leftGap = vf.minX - sf.minX
+            let rightGap = sf.maxX - vf.maxX
+            
+            switch orientation {
+            case "bottom":
+                if bottomGap > 0 {
+                    let rect = CGRect(x: screenCGFrame.origin.x, y: screenCGFrame.maxY - bottomGap, width: screenCGFrame.width, height: bottomGap)
+                    return rect.contains(point)
+                }
+            case "left":
+                if leftGap > 0 {
+                    let rect = CGRect(x: screenCGFrame.origin.x, y: screenCGFrame.origin.y, width: leftGap, height: screenCGFrame.height)
+                    return rect.contains(point)
+                }
+            case "right":
+                if rightGap > 0 {
+                    let rect = CGRect(x: screenCGFrame.maxX - rightGap, y: screenCGFrame.origin.y, width: rightGap, height: screenCGFrame.height)
+                    return rect.contains(point)
+                }
+            default:
+                break
+            }
         }
+        
+        return false
     }
 }

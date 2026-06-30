@@ -29,24 +29,6 @@ This document consolidates the review findings from the Codex subagents and the 
 - If keeping `build.sh`, only append a binary to `ARCH_BINS` after `swiftc` succeeds, or filter `ARCH_BINS` to existing files before `lipo`.
 - Keep the app bundle layout and ad-hoc signing behavior unchanged unless the new build path replaces it cleanly.
 
-### Execution Prompt
-
-```text
-You are working in /Users/eros/Documents/DockToggle. Fix the build pipeline first.
-
-Goals:
-1. Make `./build.sh` produce `.build/DockToggle.app` successfully on the current machine.
-2. Resolve the SwiftUI macro plugin failure caused by direct `swiftc` compilation.
-3. Fix the native-only fallback bug so a failed secondary architecture does not discard a successful native binary.
-4. Preserve the existing app bundle layout, Info.plist usage, icon copy, and ad-hoc signing behavior.
-
-Constraints:
-- Do not change app behavior yet.
-- Do not stage unrelated files such as `.superpowers/`.
-- Verify by running `./build.sh`.
-- Report the exact files changed and the final build result.
-```
-
 ## Priority 1: Event Tap Lifecycle And Thread Safety
 
 ### Findings
@@ -73,25 +55,6 @@ Constraints:
 - Replace the fixed sleep with a deterministic startup completion signal.
 - Keep event tap callback work fast and avoid main-thread dependence for state needed by the callback.
 - Consider replacing the mouse-up timer with a timestamp checked directly on the tap thread.
-
-### Execution Prompt
-
-```text
-You are working in /Users/eros/Documents/DockToggle. Fix the event tap lifecycle and thread safety.
-
-Goals:
-1. Remove the `Thread.sleep(0.05)` startup guess from `AppController.startEngine()`.
-2. Make `EventTapEngine` publish a deterministic startup result back to the main thread.
-3. Synchronize all access to `eventTap`, `runLoop`, `runLoopSource`, and `isRunning`.
-4. Keep `stop()` safe when called from the main thread during app termination or permission loss.
-5. Avoid adding heavy work to the CGEvent tap callback.
-
-Constraints:
-- Do not change Dock hit-testing policy in this step.
-- Keep public UI labels and settings unchanged.
-- Verify with a successful build after the build pipeline is fixed.
-- Describe any remaining runtime-only behavior that requires manual testing.
-```
 
 ## Priority 2: Dock Target Identification Correctness
 
@@ -132,26 +95,6 @@ Constraints:
 - Re-resolve Dock when AX calls fail or when the Dock PID changes.
 - Prefer bundle ID extraction from app bundles over localized name matching.
 
-### Execution Prompt
-
-```text
-You are working in /Users/eros/Documents/DockToggle. Fix Dock target identification correctness.
-
-Goals:
-1. Before swallowing a Dock click, confirm the clicked target using live AX hit testing.
-2. Prevent stale `DockIconCache` entries from causing actions on the wrong app.
-3. Handle Dock magnification by bypassing cache or refreshing/validating dynamically.
-4. Remove or harden `localizedName`-only same-app matching.
-5. Re-resolve Dock PID/AX element after Dock restart or AX failures.
-6. Prefer bundle IDs from app bundles over localized name fallbacks in `DockAppExtractor`.
-
-Constraints:
-- Do not rewrite the whole engine.
-- Preserve the existing hide/minimize behavior once a target is confirmed.
-- Keep the event tap callback fast; dispatch slow recovery work where appropriate.
-- Add focused debug log lines for cache bypass, AX confirmation, and Dock re-resolve.
-```
-
 ## Priority 3: Multi-Display And Dock Geometry
 
 ### Findings
@@ -177,24 +120,6 @@ Constraints:
 - Prefer CoreGraphics display bounds where possible.
 - If using `NSScreen`, convert each screen with its own bounds, not the first screen.
 - Compute autohide fallback size from Dock defaults such as `tilesize` and `largesize` rather than hardcoding 100.
-
-### Execution Prompt
-
-```text
-You are working in /Users/eros/Documents/DockToggle. Fix Dock geometry for multi-display setups.
-
-Goals:
-1. Replace `convertToCG(_:)` so it does not use the first screen height for every display.
-2. Make fallback Dock frame calculation work when Dock is on a non-primary display.
-3. Make `isPointInDockArea(_:)` compare points and frames in the same coordinate system.
-4. Replace the 100 point autohide hotspot with a value derived from Dock settings when possible.
-
-Constraints:
-- Keep direct AX frame detection as the preferred strategy.
-- Keep fallback behavior conservative: false negatives are better than swallowing non-Dock clicks.
-- Add comments only where coordinate-system logic would otherwise be hard to audit.
-- Include a manual test checklist for bottom, left, right, primary display, and external display cases.
-```
 
 ## Priority 4: Settings, State Synchronization, And UI Polish
 
@@ -233,25 +158,6 @@ Constraints:
 - Read version from `Bundle.main.infoDictionary`.
 - Update README to reflect the actual cache refresh behavior.
 
-### Execution Prompt
-
-```text
-You are working in /Users/eros/Documents/DockToggle. Fix settings/state/UI consistency issues.
-
-Goals:
-1. Sync Launch at Login UI from `SMAppService.mainApp.status`.
-2. Ensure menu bar settings and settings window values stay in sync.
-3. Prevent settings window content from being clipped.
-4. Replace hardcoded settings version text with the bundle version.
-5. Update README cache refresh wording so it matches the implementation.
-
-Constraints:
-- Do not touch the event tap logic in this step.
-- Keep the settings UI simple and native-looking.
-- Verify with a successful build after the build pipeline is fixed.
-- Report any behavior that needs manual System Settings verification.
-```
-
 ## Priority 5: Performance And Follow-Up Enhancements
 
 ### Findings
@@ -288,25 +194,6 @@ Constraints:
 - Cache behavior mode, trigger modifier, and exclusion list in a thread-safe settings snapshot.
 - Replace debounce set with expiration timestamps or cancellable work items.
 - Treat Stage Manager detection as best-effort and log/fallback cleanly.
-
-### Execution Prompt
-
-```text
-You are working in /Users/eros/Documents/DockToggle. Address performance and follow-up reliability improvements.
-
-Goals:
-1. Move synchronous Dock AX refresh work away from the main thread.
-2. Reduce permission polling where practical without making permission recovery confusing.
-3. Cache event-tap settings in a thread-safe snapshot instead of reading UserDefaults on every mouse down.
-4. Fix debounce so repeated clicks extend or reset the debounce window correctly.
-5. Make Stage Manager handling best-effort with graceful fallback.
-
-Constraints:
-- Do this after the correctness fixes unless explicitly asked otherwise.
-- Keep changes small and measurable.
-- Preserve current defaults and existing user settings.
-- Verify with build and describe manual runtime checks.
-```
 
 ## Suggested Overall Order
 

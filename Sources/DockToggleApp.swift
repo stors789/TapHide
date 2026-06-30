@@ -57,7 +57,7 @@ final class AppController: ObservableObject {
         PermissionsManager.shared.checkPermissions()
         let granted = PermissionsManager.shared.allGranted
         DebugLog.shared.write("[APP] permissions: ax=\(PermissionsManager.shared.accessibilityGranted) input=\(PermissionsManager.shared.inputMonitoringGranted)")
-        startMonitorTimer(interval: granted ? 30.0 : 2.0)
+        startMonitorTimer(interval: granted ? 30.0 : 10.0)
 
         if granted {
             startEngine()
@@ -95,9 +95,11 @@ final class AppController: ObservableObject {
                             withTimeInterval: 30.0,
                             repeats: true
                         ) { _ in
-                            DockInspector.shared.refreshFrame()
-                            DockIconCache.shared.refresh()
-                            EventTapEngine.shared.refreshSnapshot()
+                            DispatchQueue.global(qos: .userInitiated).async {
+                                DockInspector.shared.refreshFrame()
+                                DockIconCache.shared.refresh()
+                                EventTapEngine.shared.refreshSnapshot()
+                            }
                         }
 
                         // Setup Workspace notifications for event-driven updates
@@ -131,8 +133,10 @@ final class AppController: ObservableObject {
                                 queue: .main
                             ) { _ in
                                 DebugLog.shared.write("[APP] Screen parameters changed, refreshing Dock frame and cache")
-                                DockInspector.shared.refreshFrame()
-                                DockIconCache.shared.refresh()
+                                DispatchQueue.global(qos: .userInitiated).async {
+                                    DockInspector.shared.refreshFrame()
+                                    DockIconCache.shared.refresh()
+                                }
                             }
                         }
                     } else {
@@ -218,7 +222,7 @@ final class AppController: ObservableObject {
         }
     }
 
-    private func startMonitorTimer(interval: TimeInterval = 2.0) {
+    private func startMonitorTimer(interval: TimeInterval = 10.0) {
         monitorTimer?.invalidate()
         monitorTimer = Timer.scheduledTimer(
             withTimeInterval: interval,
@@ -235,7 +239,7 @@ final class AppController: ObservableObject {
                     self.statusMessage = "Event tap disabled"
                     self.showPermissionsWarning = true
                     EventTapEngine.shared.stop()
-                    self.startMonitorTimer(interval: 2.0)
+                    self.startMonitorTimer(interval: 10.0)
                     return
                 }
 

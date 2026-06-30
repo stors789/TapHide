@@ -4,7 +4,7 @@ import ApplicationServices
 final class ActionExecutor {
     static let shared = ActionExecutor()
 
-    private var restoringPIDs: Set<pid_t> = []
+    private var debounceDeadlines: [pid_t: Date] = [:]
     private let lock = NSLock()
 
     private init() {}
@@ -21,22 +21,23 @@ final class ActionExecutor {
     func isRestoring(pid: pid_t) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        return restoringPIDs.contains(pid)
+        if let deadline = debounceDeadlines[pid], Date() < deadline {
+            debounceDeadlines[pid] = Date().addingTimeInterval(0.4)
+            return true
+        }
+        return false
     }
 
     func markRestoring(pid: pid_t) {
         lock.lock()
-        restoringPIDs.insert(pid)
+        debounceDeadlines[pid] = Date().addingTimeInterval(0.4)
+        
+        // Cleanup old deadlines
+        let now = Date()
+        debounceDeadlines = debounceDeadlines.filter { $0.value > now }
         lock.unlock()
 
         DebugLog.shared.write("[RESTORE] debounce PID \(pid) for 400ms")
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-            self?.lock.lock()
-            self?.restoringPIDs.remove(pid)
-            self?.lock.unlock()
-            DebugLog.shared.write("[RESTORE] debounce cleared for PID \(pid)")
-        }
     }
 
     private func executeHide(pid: pid_t) {

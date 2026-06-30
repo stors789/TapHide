@@ -35,8 +35,10 @@ final class DockInspector {
         dockAppElement = AXUIElementCreateApplication(dockPID)
         log.info("Dock resolved: PID=\(self.dockPID)")
 
-        Thread.sleep(forTimeInterval: 0.05)
-        refreshFrame()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            Thread.sleep(forTimeInterval: 0.05)
+            self?.refreshFrame()
+        }
         return true
     }
 
@@ -278,10 +280,10 @@ final class DockInspector {
         if let cachedFrame = cachedGlobalDockFrame, cachedFrame.contains(point) {
             return true
         }
-
-        let dockDefaults = UserDefaults(suiteName: "com.apple.dock")
-        let orientation = dockDefaults?.string(forKey: "orientation") ?? "bottom"
-        let autohide = dockDefaults?.bool(forKey: "autohide") ?? false
+        
+        let snap = EventTapEngine.shared.snapshot
+        let orientation = snap.dockOrientation
+        let autohide = snap.dockAutohide
 
         guard let screen = NSScreen.screens.first(where: { getCGScreenBounds(for: $0).contains(point) }) else {
             return false

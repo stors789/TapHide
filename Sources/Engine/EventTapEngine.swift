@@ -45,7 +45,60 @@ final class EventTapEngine {
         }
     }
 
-    private init() {}
+    struct SettingsSnapshot {
+        var triggerModifier: String = "None"
+        var behaviorMode: BehaviorMode = .hide
+        var excludedBundleIDs: [String] = ["com.apple.finder"]
+        var magnification: Bool = false
+        var stageManagerEnabled: Bool = false
+        var dockOrientation: String = "bottom"
+        var dockAutohide: Bool = false
+    }
+
+    private var _snapshot = SettingsSnapshot()
+    private let snapshotLock = NSLock()
+
+    var snapshot: SettingsSnapshot {
+        snapshotLock.lock()
+        defer { snapshotLock.unlock() }
+        return _snapshot
+    }
+
+    func refreshSnapshot() {
+        let triggerModifier = UserDefaults.standard.string(forKey: "triggerModifier") ?? "None"
+        let rawMode = UserDefaults.standard.string(forKey: "behaviorMode") ?? "hide"
+        let behaviorMode = BehaviorMode(rawValue: rawMode) ?? .hide
+        
+        let excludedStr = UserDefaults.standard.string(forKey: "excludedBundleIDs") ?? "com.apple.finder"
+        let excludedBundleIDs = excludedStr
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            
+        let dockDefaults = UserDefaults(suiteName: "com.apple.dock")
+        let magnification = dockDefaults?.bool(forKey: "magnification") ?? false
+        let dockOrientation = dockDefaults?.string(forKey: "orientation") ?? "bottom"
+        let dockAutohide = dockDefaults?.bool(forKey: "autohide") ?? false
+        
+        // Stage manager detection best-effort
+        let smDefaults = UserDefaults(suiteName: "com.apple.WindowManager")
+        let stageManagerEnabled = smDefaults?.bool(forKey: "GloballyEnabled") ?? false
+        
+        snapshotLock.lock()
+        _snapshot = SettingsSnapshot(
+            triggerModifier: triggerModifier,
+            behaviorMode: behaviorMode,
+            excludedBundleIDs: excludedBundleIDs,
+            magnification: magnification,
+            stageManagerEnabled: stageManagerEnabled,
+            dockOrientation: dockOrientation,
+            dockAutohide: dockAutohide
+        )
+        snapshotLock.unlock()
+    }
+
+    private init() {
+        refreshSnapshot()
+    }
 
     func start(completion: @escaping (Bool) -> Void) {
         lock.lock()
@@ -95,8 +148,15 @@ final class EventTapEngine {
         let tapEnabled = CGEvent.tapIsEnabled(tap: tap)
         DispatchQueue.main.async { completion(tapEnabled) }
 
-        CFRunLoopRun()
-        log.info("CFRunLoopRun returned")
+        if tapEnabled {
+            CFRunLoopRun()
+            log.info("CFRunLoopRun returned")
+        } else {
+            lock.lock()
+            CFRunLoopRemoveSource(currentRunLoop, source, .defaultMode)
+            lock.unlock()
+            log.error("Event tap failed to enable")
+        }
         
         lock.lock()
         _isRunning = false
@@ -197,7 +257,8 @@ final class EventTapEngine {
         // type == .leftMouseDown
         
         // 1. Modifier Key Filter
-        let rawModifier = UserDefaults.standard.string(forKey: "triggerModifier") ?? "None"
+        let snap = self.snapshot
+        let rawModifier = snap.triggerModifier
         let reqFlags = requiredFlags(for: rawModifier)
         let eventFlags = event.flags
         
@@ -232,8 +293,7 @@ final class EventTapEngine {
         // 3. Multi-Space/Mission Control adaptation: get live frontmost application PID directly
         let capturedFrontmostPID = FrontmostTracker.shared.currentPID
         
-        let dockDefaults = UserDefaults(suiteName: "com.apple.dock")
-        let magnification = dockDefaults?.bool(forKey: "magnification") ?? false
+        let magnification = snap.magnification
 
         var candidatePID: pid_t? = nil
         var candidateBundleID: String? = nil
@@ -251,11 +311,10 @@ final class EventTapEngine {
         }
 
         // 4. Resolve settings
-        let rawMode = UserDefaults.standard.string(forKey: "behaviorMode") ?? "hide"
-        var mode = BehaviorMode(rawValue: rawMode) ?? .hide
+        var mode = snap.behaviorMode
 
         // Stage Manager adaptation: override Hide to Minimize if Stage Manager is enabled
-        let stageManagerEnabled = UserDefaults(suiteName: "com.apple.WindowManager")?.bool(forKey: "GloballyEnabled") ?? false
+        let stageManagerEnabled = snap.stageManagerEnabled
         if stageManagerEnabled && mode == .hide {
             DebugLog.shared.write("[TAP] Stage Manager is active: overriding behaviorMode hide -> minimize")
             mode = .minimize
@@ -270,7 +329,7 @@ final class EventTapEngine {
         var targetName = targetApp?.localizedName ?? "?"
         let frontmostName = frontmostApp?.localizedName ?? "?"
 
-        DebugLog.shared.write("[TAP] mouseDown@(\(Int(point.x)),\(Int(point.y))) frontmost=\(capturedFrontmostPID)(\(frontmostName)) target=\(targetPID)(\(targetName)) mode=\(rawMode) stageManager=\(stageManagerEnabled) mag=\(magnification)")
+        DebugLog.shared.write("[TAP] mouseDown@(\(Int(point.x)),\(Int(point.y))) frontmost=\(capturedFrontmostPID)(\(frontmostName)) target=\(targetPID)(\(targetName)) mode=\(mode.rawValue) stageManager=\(stageManagerEnabled) mag=\(magnification)")
 
         // Match by PID or bundle ID (handles multi-process apps)
         var isSameApp = targetPID == capturedFrontmostPID ||
@@ -297,10 +356,7 @@ final class EventTapEngine {
         }
 
         // 5. Excluded applications check
-        let excludedStr = UserDefaults.standard.string(forKey: "excludedBundleIDs") ?? "com.apple.finder"
-        let excludedList = excludedStr
-            .split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let excludedList = snap.excludedBundleIDs
 
         guard targetBundleID != "com.apple.dock",
               !excludedList.contains(targetBundleID ?? ""),
@@ -322,17 +378,17 @@ final class EventTapEngine {
 
         if isSameApp {
             let actionPID = capturedFrontmostPID
+            
+            if self.isAppFullscreen(pid: actionPID) {
+                DebugLog.shared.write("[TAP] actionPID=\(actionPID) is fullscreen — skipping toggle (pass through)")
+                return Unmanaged.passUnretained(event)
+            }
+
             setShouldSwallowNextMouseUp()
             ActionExecutor.shared.markRestoring(pid: targetPID)
             DebugLog.shared.write("[TAP] SWALLOW + queue check on actionPID=\(actionPID) (cache target=\(targetPID))")
             
-            // Dispatch async to avoid blocking tap callback with heavy AX UI calls
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
-                if self.isAppFullscreen(pid: actionPID) {
-                    DebugLog.shared.write("[TAP] actionPID=\(actionPID) is fullscreen — skipping toggle")
-                    return
-                }
+            DispatchQueue.main.async {
                 ActionExecutor.shared.execute(targetPID: actionPID, mode: mode)
             }
             return nil

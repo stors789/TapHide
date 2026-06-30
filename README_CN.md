@@ -137,7 +137,7 @@ Sources/
 │   ├── DecisionEngine.swift         # 早期命中测试路径，保留用于对照
 │   ├── ActionExecutor.swift         # 通过 AppKit + AX API 执行隐藏/最小化
 │   ├── DockInspector.swift          # Dock 进程解析、区域检测
-│   ├── DockIconCache.swift          # 图标位置/PID 缓存（1 秒刷新）
+│   ├── DockIconCache.swift          # 图标位置/PID 缓存（30 秒兜底刷新 + App/屏幕事件）
 │   └── FrontmostTracker.swift       # 追踪当前前台 App PID
 ├── Models/
 │   └── BehaviorMode.swift           # .hide | .minimize 枚举

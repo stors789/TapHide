@@ -137,7 +137,7 @@ Sources/
 │   ├── DecisionEngine.swift         # Earlier hit-test path kept for comparison
 │   ├── ActionExecutor.swift         # Hide / minimize via AppKit + AX APIs
 │   ├── DockInspector.swift          # Dock process resolution, frame detection
-│   ├── DockIconCache.swift          # Icon position/PID cache (1s refresh)
+│   ├── DockIconCache.swift          # Icon position/PID cache (30s fallback + app/screen events)
 │   └── FrontmostTracker.swift       # Tracks active frontmost app PID
 ├── Models/
 │   └── BehaviorMode.swift           # .hide | .minimize enum

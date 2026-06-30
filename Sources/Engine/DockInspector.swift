@@ -174,13 +174,21 @@ final class DockInspector {
     }
 
     func isDockHidden() -> Bool {
-        guard let element = dockAppElement else { return false }
+        guard let element = dockAppElement else { 
+            resolve()
+            return false 
+        }
         var hidden: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
+        let status = AXUIElementCopyAttributeValue(
             element,
             "AXHidden" as CFString,
             &hidden
-        ) == .success,
+        )
+        if status == .invalidUIElement || status == .cannotComplete {
+            resolve()
+            return false
+        }
+        guard status == .success,
               let val = hidden as? Bool
         else { return false }
         return val
@@ -188,7 +196,8 @@ final class DockInspector {
 
     func identifyApp(at point: CGPoint) -> (bundleID: String?, pid: pid_t?) {
         guard let appElement = dockAppElement else {
-            DebugLog.shared.write("[DOCK] no dockAppElement")
+            DebugLog.shared.write("[DOCK] no dockAppElement, trying to resolve")
+            resolve()
             return (nil, nil)
         }
 
@@ -201,6 +210,10 @@ final class DockInspector {
         )
         guard status == .success, let hitElement = hit else {
             DebugLog.shared.write("[DOCK] AX hit test FAILED at (\(point.x), \(point.y)): status=\(status.rawValue)")
+            if status == .invalidUIElement || status == .cannotComplete {
+                DebugLog.shared.write("[DOCK] Dock AX element invalid, re-resolving...")
+                resolve()
+            }
             return (nil, nil)
         }
 

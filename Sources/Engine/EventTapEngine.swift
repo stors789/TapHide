@@ -232,8 +232,21 @@ final class EventTapEngine {
         // 3. Multi-Space/Mission Control adaptation: get live frontmost application PID directly
         let capturedFrontmostPID = FrontmostTracker.shared.currentPID
         
-        // Cache lookup with direct identification fallback removed to avoid heavy work in tap callback
-        guard let targetPID = DockIconCache.shared.lookup(at: point) else {
+        let dockDefaults = UserDefaults(suiteName: "com.apple.dock")
+        let magnification = dockDefaults?.bool(forKey: "magnification") ?? false
+
+        var candidatePID: pid_t? = nil
+        var candidateBundleID: String? = nil
+        
+        if magnification {
+            let result = DockInspector.shared.identifyApp(at: point)
+            candidatePID = result.pid
+            candidateBundleID = result.bundleID
+        } else {
+            candidatePID = DockIconCache.shared.lookup(at: point)
+        }
+
+        guard let initialTargetPID = candidatePID else {
             return Unmanaged.passUnretained(event)
         }
 
@@ -249,14 +262,39 @@ final class EventTapEngine {
         }
 
         // Resolve bundle IDs for multi-process matching
-        let targetApp = NSRunningApplication(processIdentifier: targetPID)
+        var targetPID = initialTargetPID
+        var targetApp = NSRunningApplication(processIdentifier: targetPID)
         let frontmostApp = NSRunningApplication(processIdentifier: capturedFrontmostPID)
-        let targetBundleID = targetApp?.bundleIdentifier
+        var targetBundleID = candidateBundleID ?? targetApp?.bundleIdentifier
         let frontmostBundleID = frontmostApp?.bundleIdentifier
-        let targetName = targetApp?.localizedName ?? "?"
+        var targetName = targetApp?.localizedName ?? "?"
         let frontmostName = frontmostApp?.localizedName ?? "?"
 
-        DebugLog.shared.write("[TAP] mouseDown@(\(Int(point.x)),\(Int(point.y))) frontmost=\(capturedFrontmostPID)(\(frontmostName)) target=\(targetPID)(\(targetName)) mode=\(rawMode) stageManager=\(stageManagerEnabled)")
+        DebugLog.shared.write("[TAP] mouseDown@(\(Int(point.x)),\(Int(point.y))) frontmost=\(capturedFrontmostPID)(\(frontmostName)) target=\(targetPID)(\(targetName)) mode=\(rawMode) stageManager=\(stageManagerEnabled) mag=\(magnification)")
+
+        // Match by PID or bundle ID (handles multi-process apps)
+        var isSameApp = targetPID == capturedFrontmostPID ||
+            (targetBundleID != nil && targetBundleID == frontmostBundleID)
+
+        if isSameApp && !magnification {
+            // Live AX hit test confirmation before swallowing to prevent stale cache issues
+            let liveResult = DockInspector.shared.identifyApp(at: point)
+            if let livePID = liveResult.pid {
+                if livePID != targetPID && liveResult.bundleID != targetBundleID {
+                    DebugLog.shared.write("[TAP] Cache stale! Live AX returned different app: pid=\(livePID) bundle=\(liveResult.bundleID ?? "nil")")
+                    targetPID = livePID
+                    targetApp = NSRunningApplication(processIdentifier: targetPID)
+                    targetBundleID = liveResult.bundleID ?? targetApp?.bundleIdentifier
+                    targetName = targetApp?.localizedName ?? "?"
+                    
+                    isSameApp = targetPID == capturedFrontmostPID ||
+                        (targetBundleID != nil && targetBundleID == frontmostBundleID)
+                }
+            } else {
+                DebugLog.shared.write("[TAP] Cache stale! Live AX returned no app at point")
+                isSameApp = false
+            }
+        }
 
         // 5. Excluded applications check
         let excludedStr = UserDefaults.standard.string(forKey: "excludedBundleIDs") ?? "com.apple.finder"
@@ -277,11 +315,6 @@ final class EventTapEngine {
             DebugLog.shared.write("[TAP] debounce — pass through for PID \(targetPID)")
             return Unmanaged.passUnretained(event)
         }
-
-        // Match by PID, bundle ID, or localized name (handles multi-process apps)
-        let isSameApp = targetPID == capturedFrontmostPID ||
-            (targetBundleID != nil && targetBundleID == frontmostBundleID) ||
-            (targetApp?.localizedName != nil && targetApp?.localizedName == frontmostApp?.localizedName)
 
         if !isSameApp {
             DebugLog.shared.write("[TAP] mismatch: pid(\(targetPID)!=\(capturedFrontmostPID)) bundle(\(targetBundleID ?? "nil")!=\(frontmostBundleID ?? "nil")) name(\(targetName)!=\(frontmostName))")

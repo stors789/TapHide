@@ -60,68 +60,78 @@ final class AppController: ObservableObject {
         appLog.info("Dock frame: \(String(describing: frame))")
 
         engineThread = Thread {
-            let ok = EventTapEngine.shared.start()
-            appLog.info("EventTapEngine.start() returned \(ok)")
+            EventTapEngine.shared.start { [weak self] success in
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    if success {
+                        self.isEngineRunning = true
+                        self.statusMessage = "Running"
+                        DockIconCache.shared.refresh()
+                        
+                        // Setup cache refresh timer (30s fallback/polling)
+                        self.cacheRefreshTimer?.invalidate()
+                        self.cacheRefreshTimer = Timer.scheduledTimer(
+                            withTimeInterval: 30.0,
+                            repeats: true
+                        ) { _ in
+                            DockInspector.shared.refreshFrame()
+                            DockIconCache.shared.refresh()
+                        }
+
+                        // Setup Workspace notifications for event-driven updates
+                        let workspaceCenter = NSWorkspace.shared.notificationCenter
+                        if self.launchObserver == nil {
+                            self.launchObserver = workspaceCenter.addObserver(
+                                forName: NSWorkspace.didLaunchApplicationNotification,
+                                object: nil,
+                                queue: .main
+                            ) { _ in
+                                DebugLog.shared.write("[APP] Application launched, refreshing cache")
+                                DockIconCache.shared.refresh()
+                            }
+                        }
+
+                        if self.terminateObserver == nil {
+                            self.terminateObserver = workspaceCenter.addObserver(
+                                forName: NSWorkspace.didTerminateApplicationNotification,
+                                object: nil,
+                                queue: .main
+                            ) { _ in
+                                DebugLog.shared.write("[APP] Application terminated, refreshing cache")
+                                DockIconCache.shared.refresh()
+                            }
+                        }
+
+                        if self.screenObserver == nil {
+                            self.screenObserver = NotificationCenter.default.addObserver(
+                                forName: NSApplication.didChangeScreenParametersNotification,
+                                object: nil,
+                                queue: .main
+                            ) { _ in
+                                DebugLog.shared.write("[APP] Screen parameters changed, refreshing Dock frame and cache")
+                                DockInspector.shared.refreshFrame()
+                                DockIconCache.shared.refresh()
+                            }
+                        }
+                    } else {
+                        self.statusMessage = "Tap creation failed"
+                        appLog.error("Event tap created but not enabled — check permissions")
+                        self.isEngineRunning = false
+                        self.engineThread = nil
+                    }
+                }
+            }
+            
             DispatchQueue.main.async { [weak self] in
                 self?.isEngineRunning = false
-                self?.statusMessage = "Event tap stopped"
+                if self?.statusMessage == "Running" {
+                    self?.statusMessage = "Event tap stopped"
+                }
+                self?.engineThread = nil
             }
         }
         engineThread?.name = "com.docktoggle.eventtap"
         engineThread?.start()
-
-        Thread.sleep(forTimeInterval: 0.05)
-
-        guard EventTapEngine.shared.isTapEnabled else {
-            statusMessage = "Tap creation failed"
-            appLog.error("Event tap created but not enabled — check permissions")
-            return
-        }
-
-        isEngineRunning = true
-        statusMessage = "Running"
-
-        DockIconCache.shared.refresh()
-        
-        // Setup cache refresh timer (30s fallback/polling)
-        cacheRefreshTimer?.invalidate()
-        cacheRefreshTimer = Timer.scheduledTimer(
-            withTimeInterval: 30.0,
-            repeats: true
-        ) { _ in
-            DockInspector.shared.refreshFrame()
-            DockIconCache.shared.refresh()
-        }
-
-        // Setup Workspace notifications for event-driven updates
-        let workspaceCenter = NSWorkspace.shared.notificationCenter
-        launchObserver = workspaceCenter.addObserver(
-            forName: NSWorkspace.didLaunchApplicationNotification,
-            object: nil,
-            queue: .main
-        ) { _ in
-            DebugLog.shared.write("[APP] Application launched, refreshing cache")
-            DockIconCache.shared.refresh()
-        }
-
-        terminateObserver = workspaceCenter.addObserver(
-            forName: NSWorkspace.didTerminateApplicationNotification,
-            object: nil,
-            queue: .main
-        ) { _ in
-            DebugLog.shared.write("[APP] Application terminated, refreshing cache")
-            DockIconCache.shared.refresh()
-        }
-
-        screenObserver = NotificationCenter.default.addObserver(
-            forName: NSApplication.didChangeScreenParametersNotification,
-            object: nil,
-            queue: .main
-        ) { _ in
-            DebugLog.shared.write("[APP] Screen parameters changed, refreshing Dock frame and cache")
-            DockInspector.shared.refreshFrame()
-            DockIconCache.shared.refresh()
-        }
     }
 
     func onPermissionsChanged() {

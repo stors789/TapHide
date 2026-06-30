@@ -6,10 +6,16 @@ final class EventTapEngine {
     static let shared = EventTapEngine()
     private let log = Logger(subsystem: "com.docktoggle", category: "EventTap")
 
-    private var eventTap: CFMachPort?
-    private var runLoop: CFRunLoop?
-    private var runLoopSource: CFRunLoopSource?
-    private(set) var isRunning = false
+    private var _eventTap: CFMachPort?
+    private var _runLoop: CFRunLoop?
+    private var _runLoopSource: CFRunLoopSource?
+    private var _isRunning = false
+
+    var isRunning: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return _isRunning
+    }
 
     private let lock = NSLock()
     private var _shouldSwallowNextMouseUp = false
@@ -41,8 +47,14 @@ final class EventTapEngine {
 
     private init() {}
 
-    func start() -> Bool {
-        guard !isRunning else { return true }
+    func start(completion: @escaping (Bool) -> Void) {
+        lock.lock()
+        if _isRunning {
+            lock.unlock()
+            DispatchQueue.main.async { completion(true) }
+            return
+        }
+        lock.unlock()
 
         let mask: CGEventMask = CGEventMask(1 << CGEventType.leftMouseDown.rawValue) |
                                 CGEventMask(1 << CGEventType.leftMouseUp.rawValue)
@@ -60,45 +72,70 @@ final class EventTapEngine {
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
             log.error("CGEvent.tapCreate returned nil")
-            return false
+            DispatchQueue.main.async { completion(false) }
+            return
         }
 
-        eventTap = tap
         log.info("Event tap created (defaultTap)")
 
         let currentRunLoop = CFRunLoopGetCurrent()
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        runLoop = currentRunLoop
-        runLoopSource = source
+        
+        lock.lock()
+        _eventTap = tap
+        _runLoop = currentRunLoop
+        _runLoopSource = source
+        _isRunning = true
+        lock.unlock()
+
         CFRunLoopAddSource(currentRunLoop, source, .defaultMode)
         CGEvent.tapEnable(tap: tap, enable: true)
-        isRunning = true
         log.info("Event tap running on dedicated RunLoop")
+        
+        let tapEnabled = CGEvent.tapIsEnabled(tap: tap)
+        DispatchQueue.main.async { completion(tapEnabled) }
+
         CFRunLoopRun()
         log.info("CFRunLoopRun returned")
-        isRunning = false
-        eventTap = nil
-        runLoop = nil
-        runLoopSource = nil
-        return true
+        
+        lock.lock()
+        _isRunning = false
+        _eventTap = nil
+        _runLoop = nil
+        _runLoopSource = nil
+        lock.unlock()
     }
 
     func stop() {
-        guard let tap = eventTap else { return }
-        CGEvent.tapEnable(tap: tap, enable: false)
-        if let runLoop, let runLoopSource {
-            CFRunLoopRemoveSource(runLoop, runLoopSource, .defaultMode)
-            CFRunLoopStop(runLoop)
+        lock.lock()
+        let tap = _eventTap
+        let rl = _runLoop
+        let source = _runLoopSource
+        let running = _isRunning
+        
+        if let tap = tap {
+            CGEvent.tapEnable(tap: tap, enable: false)
         }
-        eventTap = nil
-        runLoop = nil
-        runLoopSource = nil
-        isRunning = false
-        log.info("Event tap stopped")
+        if let rl = rl, let source = source {
+            CFRunLoopRemoveSource(rl, source, .defaultMode)
+            CFRunLoopStop(rl)
+        }
+        
+        _eventTap = nil
+        _runLoop = nil
+        _runLoopSource = nil
+        _isRunning = false
+        lock.unlock()
+
+        if running {
+            log.info("Event tap stopped")
+        }
     }
 
     var isTapEnabled: Bool {
-        guard let tap = eventTap else { return false }
+        lock.lock()
+        defer { lock.unlock() }
+        guard let tap = _eventTap else { return false }
         return CGEvent.tapIsEnabled(tap: tap)
     }
 
@@ -136,7 +173,10 @@ final class EventTapEngine {
         // Handle Event Tap auto-disable recovery
         if type == .tapDisabledByTimeout {
             log.warning("Event tap disabled by timeout, re-enabling...")
-            if let tap = eventTap {
+            lock.lock()
+            let tap = _eventTap
+            lock.unlock()
+            if let tap = tap {
                 CGEvent.tapEnable(tap: tap, enable: true)
             }
             return nil
@@ -190,20 +230,10 @@ final class EventTapEngine {
         }
 
         // 3. Multi-Space/Mission Control adaptation: get live frontmost application PID directly
-        let liveFrontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? FrontmostTracker.shared.currentPID
-        let capturedFrontmostPID = liveFrontmostPID
+        let capturedFrontmostPID = FrontmostTracker.shared.currentPID
         
-        // Cache lookup with direct identification fallback (solves magnification and sync issues)
-        var targetPID = DockIconCache.shared.lookup(at: point)
-        if targetPID == nil {
-            let identified = DockInspector.shared.identifyApp(at: point)
-            targetPID = identified.pid
-            if let pid = targetPID {
-                DebugLog.shared.write("[TAP] cache miss but direct identification succeeded: pid=\(pid)")
-            }
-        }
-
-        guard let targetPID = targetPID else {
+        // Cache lookup with direct identification fallback removed to avoid heavy work in tap callback
+        guard let targetPID = DockIconCache.shared.lookup(at: point) else {
             return Unmanaged.passUnretained(event)
         }
 
@@ -258,17 +288,18 @@ final class EventTapEngine {
         }
 
         if isSameApp {
-            // Fullscreen check: don't toggle fullscreen applications (exiting fullscreen can be disruptive)
             let actionPID = capturedFrontmostPID
-            if isAppFullscreen(pid: actionPID) {
-                DebugLog.shared.write("[TAP] actionPID=\(actionPID) is fullscreen — passing through")
-                return Unmanaged.passUnretained(event)
-            }
-
             setShouldSwallowNextMouseUp()
             ActionExecutor.shared.markRestoring(pid: targetPID)
-            DebugLog.shared.write("[TAP] SWALLOW + execute \(mode) on actionPID=\(actionPID) (cache target=\(targetPID))")
-            DispatchQueue.main.async {
+            DebugLog.shared.write("[TAP] SWALLOW + queue check on actionPID=\(actionPID) (cache target=\(targetPID))")
+            
+            // Dispatch async to avoid blocking tap callback with heavy AX UI calls
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                if self.isAppFullscreen(pid: actionPID) {
+                    DebugLog.shared.write("[TAP] actionPID=\(actionPID) is fullscreen — skipping toggle")
+                    return
+                }
                 ActionExecutor.shared.execute(targetPID: actionPID, mode: mode)
             }
             return nil

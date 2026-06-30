@@ -1,7 +1,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/平台-macOS%2014.0%2B-blue" alt="平台">
   <img src="https://img.shields.io/badge/架构-arm64%20%7C%20x86__64-brightgreen" alt="架构">
-  <img src="https://img.shields.io/badge/许可-MIT-green" alt="许可">
+  <img src="https://img.shields.io/badge/许可-GPL--3.0-green" alt="许可">
   <img src="https://img.shields.io/badge/由-DeepSeek%20v4%20Pro%20%2B%20OpenCode%20生成-purple" alt="由…生成">
   <br>
   <a href="README.md"><img src="https://img.shields.io/badge/readme-English-blue?style=flat-square" alt="English Docs"></a>
@@ -192,7 +192,7 @@ tail -f ~/Library/Logs/DockToggle/docktoggle.log
 
 ## 许可
 
-MIT
+GPL-3.0
 
 ---
 

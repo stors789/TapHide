@@ -2,7 +2,14 @@
 
 All notable changes to TapHide are tracked here.
 
-## Unreleased
+## 2.0.0 (2026-07-02)
+
+### Changed
+- **Project Renamed**: DockToggle is now **TapHide**. All configurations, bundle identifiers, and log paths have been updated.
+
+### Fixed
+- **Critical Fix**: Fixed an issue where the app was unable to correctly cast `AXURL` to `URL` on macOS 14+, which caused the app to fail to identify running applications and ignore all Dock clicks.
+
 
 ## 1.1.0 (2026-06-19)
 

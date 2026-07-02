@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./icon.png" width="168" height="168" alt="TapHide app icon">
+  <img src="./taphide-icon-2.0.1.png" width="168" height="168" alt="TapHide app icon">
 </p>
 
 <p align="center">
